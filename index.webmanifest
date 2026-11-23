@@ -1,0 +1,33 @@
+{
+ "id": "./",
+ "name": "Q24 무인 당구장",
+ "short_name": "Q24",
+ "description": "Q24 앱 모음",
+ "start_url": "./",
+ "scope": "./",
+ "display": "standalone",
+ "orientation": "any",
+ "background_color": "#15333e",
+ "theme_color": "#15333e",
+ "lang": "ko",
+ "icons": [
+  {
+   "src": "icons/home-192.png",
+   "sizes": "192x192",
+   "type": "image/png",
+   "purpose": "any"
+  },
+  {
+   "src": "icons/home-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "any"
+  },
+  {
+   "src": "icons/home-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "maskable"
+  }
+ ]
+}

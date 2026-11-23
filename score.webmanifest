@@ -1,0 +1,33 @@
+{
+ "id": "./score.html",
+ "name": "Q24 점수판",
+ "short_name": "점수판",
+ "description": "Q24 테이블 점수판",
+ "start_url": "./score.html",
+ "scope": "./score.html",
+ "display": "fullscreen",
+ "orientation": "any",
+ "background_color": "#05080f",
+ "theme_color": "#05080f",
+ "lang": "ko",
+ "icons": [
+  {
+   "src": "icons/score-192.png",
+   "sizes": "192x192",
+   "type": "image/png",
+   "purpose": "any"
+  },
+  {
+   "src": "icons/score-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "any"
+  },
+  {
+   "src": "icons/score-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "maskable"
+  }
+ ]
+}
