@@ -360,7 +360,7 @@ main{grid-template-columns:minmax(0,1fr) minmax(360px,1.25fr)}
 
 <!-- ---------- 설정 페이지 (⚙) ---------- -->
 <section id="settingsPage" hidden aria-label="설정">
- <header><div class="brand"><h1>⚙ 설정 <span class="verBadge" id="verBadge">v2.14</span></h1></div><div class="hdrRight"><button id="closeSettings" class="primary" type="button">닫고 입장 화면으로</button></div></header>
+ <header><div class="brand"><h1>⚙ 설정 <span class="verBadge" id="verBadge">v2.16</span></h1></div><div class="hdrRight"><button id="closeSettings" class="primary" type="button">닫고 입장 화면으로</button></div></header>
  <div class="spBody">
   <section class="card"><h2>카메라</h2>
    <div class="row"><button id="restart" type="button">카메라 재시작</button><select id="facing" aria-label="카메라 방향"><option value="user">전면 카메라</option><option value="environment">후면 카메라</option></select></div>
@@ -781,7 +781,7 @@ const Ntfy=(()=>{
 <script>
 'use strict';
 const $=id=>document.getElementById(id),video=$('video'),wait=ms=>new Promise(r=>setTimeout(r,ms));
-const VERSION='2.14',PIPE='v3-align150',VISIT_KEY='q24Visits',PIN_KEY='q24SettingsPin',REMOTE_KEY='q24Remote';
+const VERSION='2.16',PIPE='v3-align150',VISIT_KEY='q24Visits',PIN_KEY='q24SettingsPin',REMOTE_KEY='q24Remote';
 const LIB='https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
 const MODEL_URL='https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 /* 표준 영역 · 품질 (얼굴 폭 ÷ 영상 짧은 변) */
@@ -1909,7 +1909,7 @@ window.testCreateMember=async function(i){
  if(members.some(m=>dn(m).toLowerCase()===nick.toLowerCase()))return{ok:false,reason:'이미 쓰는 닉네임/이름입니다'};
  if(digits&&digits.length<10)return{ok:false,reason:'휴대폰 번호가 짧습니다'};
  if(digits&&members.some(m=>String(m.phone||'').replace(/\D/g,'')===digits))return{ok:false,reason:'이미 등록된 휴대폰 번호입니다'};
- let hqr=null;if(HQ.configured()){if(digits.length<10)return{ok:false,reason:'본사 연결 중에는 휴대폰 번호가 필요합니다'};hqr=await hqRegister({phone:digits,nick,name});if(!hqr.ok)return{ok:false,reason:hqr.msg}}
+ let hqr=null;if(HQ.configured()&&digits.length>=10){hqr=await hqRegister({phone:digits,nick,name});if(!hqr.ok)return{ok:false,reason:hqr.msg}}   // 전화번호 없는 회원(시험 계정 등)은 이 매장에만 등록
  const now=Date.now(),id=hqr?.id||fmtId(nextNum());
  const member={id,...(hqr?{hq:hqr.hq}:{}),name,nick,handi3:h3,handi4:h4,game:h3||!h4?'3구':'4구',handi:h3||h4,phone:digits?fmtPhone(digits):'',descriptors:[],template:null,pipeline:PIPE,noFace:true,photo:'',createdAt:now,madeBy:'관리자(테스트)'};
  await writeDB(st=>st.put(member));members.push(member);store.set(NEXT_KEY,String(Number(id.slice(1))+1));
@@ -2259,7 +2259,7 @@ const MemberGate=(()=>{
  }
  function me(u){
   const m=members.find(x=>x.id===u.memberId);if(!m)return null;const H=handiOf(m),v=visits.open[m.id],mo=monthlyOf(m.id);
-  return{uid:u.uid,name:dn(m),nick:dn(m),phone:m.phone||'',test:!!u.test,disp:dispOf(m.id),game:m.game||'',h3:H.h3??'',h4:H.h4??'',monthly:mo?{end:mo.end||'',bal:monBalOf(m.id)}:null,msgs:msgsOf(m.id),prepaid:balanceOf(m.id),coupons:couponsOf(m.id),
+  return{uid:u.uid,code:m.hq||'',storeNo:(()=>{try{return HQ.configured()?HQ.config().store:''}catch{return ''}})(),name:dn(m),nick:dn(m),phone:m.phone||'',test:!!u.test,disp:dispOf(m.id),game:m.game||'',h3:H.h3??'',h4:H.h4??'',monthly:mo?{end:mo.end||'',bal:monBalOf(m.id)}:null,msgs:msgsOf(m.id),prepaid:balanceOf(m.id),coupons:couponsOf(m.id),
    attend:attendOf(m.id),visit:v?{inAt:v.inAt,rest:!!v.rest,restAt:v.restAt||0,outReq:v.outReq||0}:null,where:whereOf(m.id),team:board?.types?.[m.id]||'p',push:u.topic||'',
    avg:null,win:null,since:m.createdAt||0};   // 에버리지·승률: 점수판 연동 후 채움
  }
@@ -2280,7 +2280,7 @@ const MemberGate=(()=>{
   const {base}=R();if(!base)return;const t='q24/v1/dir/'+storeId();
   if(!webOn()){if(dirSent!=='off'){pubRaw(t,'',true);dirSent='off'}mwUi();return}
   const k=await ensureKeys(),s=storeInfo();
-  const payload=await signed({type:'q24store',v:1,id:s.id,name:s.name,addr:s.addr,tier:s.tier,base,dh:k.dhPub,dev:localStorage.getItem('q24DevId')||'',ver:VERSION,at:Date.now()});
+  const payload=await signed({type:'q24store',v:1,id:s.id,name:s.name,addr:s.addr,tier:s.tier,base,dh:k.dhPub,dev:localStorage.getItem('q24DevId')||'',hq:(()=>{try{return HQ.configured()?HQ.config().store:''}catch{return ''}})(),ver:VERSION,at:Date.now()});
   pubRaw(t,payload,true);dirSent='on';mwUi();
  }
  function schedulePub(){clearTimeout(pubTimer);pubTimer=setTimeout(async()=>{
@@ -2455,7 +2455,7 @@ const MemberGate=(()=>{
 </script>
 <script>
 'use strict';
-/* ===== Q24 본사 연결 (hqlink v1) · 인식기·업주 웹 공용 =====
+/* ===== Q24 본사 연결 (hqlink v2) · 인식기·업주 웹 공용 =====
    - 본사 PC(hq.html)와 같은 MQTT 방식으로 요청/응답 · 상태 신호 · 원격 명령 · 공지를 주고받습니다.
    - 본사 설정을 넣지 않으면 아무 동작도 하지 않습니다 (기존 매장은 그대로).
    - 이 모듈은 매장 자료를 지우거나 바꾸지 않습니다. 화면 띠·메시지·잠금만 직접 그립니다.
@@ -2535,7 +2535,7 @@ const HQ=(()=>{
   done.push(key);done=done.slice(-200);ls.set(DONE_KEY,JSON.stringify(done));
   let r;try{r=opt.onCmd?await opt.onCmd(c):undefined;if(r===undefined)r=await builtin(c)}catch(e){r={ok:false,result:e.message}}
   try{client.publish(base+'/ack',await seal({id:c.id,dev:devName(),ok:r?.ok!==false,result:r?.result??''}),{qos:1})}catch{}
-  if(r?.after)setTimeout(r.after,800);
+  setTimeout(beat,1500);if(r?.after)setTimeout(r.after,800);
  }
  async function builtin(c){
   switch(c.type){
@@ -2568,11 +2568,15 @@ const HQ=(()=>{
    ...(need?[(()=>{const r=css(document.createElement('div'),'padding:8px 14px;text-align:center;color:#fff;background:#c62828');r.textContent='⬆ 앱 업데이트가 필요합니다 (지금 v'+opt.ver+' → v'+need+' 이상) · 설정에서 "최신 버전으로 새로고침"';return r})()]:[]))}
  setInterval(drawBc,60000);
  /* ---- 바깥에서 쓰는 것 ---- */
+ function prefill(){if(cfg.code||cfg.on)return;try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(!k||k===KEY||!k.startsWith('q24HqLink:'))continue;const o=JSON.parse(localStorage.getItem(k)||'{}');if(o.code&&o.pass){cfg={...cfg,code:o.code,pass:o.pass,store:cfg.store||o.store||'',broker:o.broker||cfg.broker};break}}}catch{}}
  function init(o){opt={...opt,...o};KEY='q24HqLink:'+opt.app;DONE_KEY='q24HqDone:'+opt.app;LOCK_KEY='q24HqLock:'+opt.app;ERR_KEY='q24HqErr:'+opt.app;
   try{errs=JSON.parse(ls.get(ERR_KEY))||[]}catch{errs=[]}try{done=JSON.parse(ls.get(DONE_KEY))||[]}catch{done=[]}
-  cfg={...cfg,...load()};const go=()=>{showLock();start()};document.readyState==='loading'?addEventListener('DOMContentLoaded',go):go()}
+  cfg={...cfg,...load()};
+  /* 같은 기기의 다른 Q24 앱에 본사 접속 정보가 있으면 미리 채워 둠 (켜기는 각 앱에서 [저장]) */
+  prefill();
+  const go=()=>{showLock();start()};document.readyState==='loading'?addEventListener('DOMContentLoaded',go):go()}
  function save(n){cfg={...cfg,...n};cfg.store=String(cfg.store||'').trim().toUpperCase();cfg.code=String(cfg.code||'').trim();ls.set(KEY,JSON.stringify(cfg));start()}
- const config=()=>({...cfg});
+ const config=()=>{prefill();return{...cfg}};
  return{init,save,config,state,req,start,stop,beat,configured,linkReady,pushErr,showMsg,devName,_seal:o=>seal(o),_unseal:s=>unseal(s)};
 })();
 
@@ -2628,11 +2632,12 @@ function hqShowStorePw(){const c=Remote.config();document.getElementById('hqMsg'
  const box=document.querySelector('#hqMsg div div:nth-child(2)'),btn=document.createElement('button');btn.type='button';btn.textContent='보기';btn.style.cssText='margin-top:10px;padding:10px 18px;font:700 18px system-ui;border-radius:10px;border:1px solid #888;background:#f4f4f4';
  btn.onclick=()=>{box.textContent='매장 코드: '+c.site+'\n비밀번호: '+(c.pass||'(없음)');setTimeout(()=>{if(box.isConnected)box.textContent='매장 코드: '+c.site+'\n비밀번호: ●●●●●●'},10000)};box.after(btn)}
 HQ.init({app:'checkin',label:'인식기',kind:'C',ver:VERSION,hwid:()=>HQ_DEV_ID,
- info:()=>({bat:BAT.level,charging:BAT.charging,members:members.length,withHq:members.filter(m=>m.hq).length,inNow:Object.keys(visits?.open||{}).length,site:(()=>{try{return Remote.config().site}catch{return ''}})()}),
+ info:()=>({storeName:(()=>{try{const mc=JSON.parse(localStorage.getItem('q24Mcfg')||'null'),site=String(Remote.config().site||'').trim();return mc&&String(mc.site||'').trim()===site?String(mc.name||'').trim():''}catch{return ''}})(),bat:BAT.level,charging:BAT.charging,members:members.length,withHq:members.filter(m=>m.hq).length,inNow:Object.keys(visits?.open||{}).length,site:(()=>{try{return Remote.config().site}catch{return ''}})()}),
  handles:['reload','update','getLog','getInfo','message','lock','unlock','ownerPwReset','setConfig'],
  onCmd:async c=>{
   if(c.type==='ownerPwReset'){hqShowStorePw();return{ok:true,result:'인식기 화면에 업주 접속 정보 창을 띄움 (보기 눌러야 표시)'}}
   if(c.type==='setConfig'){const m=/^([\w.-]+)=(.*)$/s.exec(c.text||'');if(!m)return{ok:false,result:'"키=값" 형식이 아님'};const k=m[1],v=m[2].trim(),rule=HQ_SET_KEYS[k];
+   if(k==='storeName')return{ok:true,result:'매장 이름은 업주 웹 설정을 따릅니다 (업주 웹이 바꾸면 여기도 바뀜)'};
    if(rule===undefined)return{ok:false,result:'인식기에서 바꿀 수 없는 키: '+k+' (가능: '+Object.keys(HQ_SET_KEYS).join(', ')+')'};
    if(Array.isArray(rule)&&!rule.includes(v))return{ok:false,result:k+' 값은 '+rule.join('/')+' 중 하나'};
    settings[k]=rule==='bool'?/^(1|true|on|yes|켜기)$/i.test(v):v;saveSettings();return{ok:true,result:k+'='+settings[k]+' (다음 새로고침부터 완전 적용)'}}
@@ -2651,7 +2656,7 @@ document.getElementById('hqPing').onclick=async()=>{const t=Date.now(),r=await H
 (()=>{
  const KEY='q24Greet',DEF='Q24 당구장에 오신 것을 환영합니다';
  let g=(()=>{try{return Object.assign({text:DEF,speed:75},JSON.parse(localStorage.getItem(KEY))||{})}catch{return{text:DEF,speed:75}}})();
- if(String(g.text||'').trim()==='가브리엘 당구장에 오신 것을 환영합니다')g.text=DEF;   // 예전 기본 문구는 새 기본값으로
+ if(String(g.text||'').trim()==='가브리엘 당구장에 오신 것을 환영합니다')g.text=DEF;else if(String(g.text||'').includes('가브리엘 당구장'))g.text=String(g.text).split('가브리엘 당구장').join('Q24 당구장');   // 예전 기본 문구는 새 기본값으로
  const $g=id=>document.getElementById(id);
  function apply(){
   const sp=$g('greet'),box=sp?.parentElement;if(!sp||!box)return;

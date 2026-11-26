@@ -2,16 +2,18 @@
 <html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Q24 무인 당구장</title>
-<meta name="theme-color" content="#15333e">
+<meta name="theme-color" content="#131727">
 <link rel="icon" href="icons/home-192.png"><link rel="apple-touch-icon" href="icons/home-192.png">
 <link rel="manifest" href="index.webmanifest">
 <style>
 :root{--navy:#15333e;--ink:#1d2939;--sub:#667085;--line:#d5dde6}
 *{box-sizing:border-box}
 body{margin:0;font-family:"Pretendard","Noto Sans KR",system-ui,-apple-system,"Malgun Gothic",sans-serif;background:#eef2f6;color:var(--ink);min-height:100vh;display:flex;flex-direction:column}
-header{background:var(--navy);color:#fff;padding:22px 18px 26px;text-align:center}
-header img{width:84px;height:84px;border-radius:22px;box-shadow:0 6px 18px rgba(0,0,0,.3)}
-header h1{margin:12px 0 2px;font-size:26px;letter-spacing:-.5px}
+header{background:#131727;color:#fff;padding:14px 12px 22px;text-align:center;overflow:hidden}
+header .logo{display:block;width:min(94vw,460px);height:auto;margin:0 auto;-webkit-mask-image:linear-gradient(to bottom,transparent,#000 5%,#000 92%,transparent),linear-gradient(to right,transparent,#000 3%,#000 97%,transparent);-webkit-mask-composite:source-in;mask-image:linear-gradient(to bottom,transparent,#000 5%,#000 92%,transparent),linear-gradient(to right,transparent,#000 3%,#000 97%,transparent);mask-composite:intersect}
+header h1.neon{margin:2px 0 6px;font-size:clamp(34px,10vw,52px);font-weight:900;letter-spacing:6px;color:#fff1f1;text-shadow:0 0 4px #fff,0 0 10px #ff3b3b,0 0 22px #ff1a1a,0 0 42px #ff0000,0 0 70px #ff0000;animation:neon 3.2s infinite}
+@keyframes neon{0%,18%,22%,100%{opacity:1}20%{opacity:.75}}
+@media (prefers-reduced-motion:reduce){header h1.neon{animation:none}}
 header p{margin:0;opacity:.75;font-size:14px}
 main{flex:1;width:100%;max-width:560px;margin:0 auto;padding:18px 16px 10px}
 a.app{display:flex;align-items:center;gap:16px;text-decoration:none;color:inherit;background:#fff;border:2px solid var(--line);border-radius:20px;padding:16px 18px;margin:0 0 12px;box-shadow:0 3px 0 #c9d4e3;transition:transform .08s}
@@ -26,10 +28,10 @@ h2{font-size:14px;color:var(--sub);margin:20px 4px 8px;font-weight:700}
 a.app.dis{opacity:.45;pointer-events:none}
 footer{text-align:center;color:var(--sub);font-size:12px;padding:14px 10px 22px}
 </style></head><body>
-<header><img src="icons/home-192.png" alt=""><h1>Q24 무인 당구장</h1><p>사용할 앱을 눌러 주세요</p></header>
+<header><img class="logo" src="icons/logo.webp" alt="큐24" width="820" height="581"><h1 class="neon">웹관리</h1><p>Q24 무인 당구장 · 사용할 앱을 눌러 주세요</p></header>
 <main>
- <a class="app big" href="member.html"><span class="ic">🙋</span><span><b>회원 (손님용)</b><small>매장 현황 · 입실 · 휴식 · 퇴실 · 내 정보</small></span></a>
  <a class="app" href="owner.html"><span class="ic">👤</span><span><b>업주</b><small>입실현황 · 입금 · 회원 · 매출 관리</small></span></a>
+ <a class="app big" href="member.html"><span class="ic">🙋</span><span><b>회원 (손님용)</b><small>매장 현황 · 입실 · 휴식 · 퇴실 · 내 정보</small></span></a>
  <h2>매장 기기 설치용</h2>
  <a class="app" href="checkin.html"><span class="ic">🙂</span><span><b>인식기</b><small>입구 태블릿 1대 · 얼굴/전화번호 입장</small></span></a>
  <a class="app" href="board.html"><span class="ic">📋</span><span><b>현황판</b><small>벽면 태블릿 · 테이블·대기 현황</small></span></a>

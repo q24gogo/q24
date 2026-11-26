@@ -1511,6 +1511,171 @@ addEventListener('beforeinstallprompt',e=>{e.preventDefault();INST.evt=e;if(PAGE
 addEventListener('appinstalled',()=>{INST.evt=null;toast('점수판 앱이 설치되었습니다')});
 if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost'))addEventListener('load',()=>{navigator.serviceWorker.register('score-sw.js',{scope:'./score.html'}).then(r=>{INST.swOk=true;try{r.update()}catch(e){}}).catch(e=>{INST.swErr=String(e&&e.message||e)})});
 
+/* ===== Q24 본사 연결 (hqlink v2) · 인식기·업주 웹 공용 =====
+   - 본사 PC(hq.html)와 같은 MQTT 방식으로 요청/응답 · 상태 신호 · 원격 명령 · 공지를 주고받습니다.
+   - 본사 설정을 넣지 않으면 아무 동작도 하지 않습니다 (기존 매장은 그대로).
+   - 이 모듈은 매장 자료를 지우거나 바꾸지 않습니다. 화면 띠·메시지·잠금만 직접 그립니다.
+   base = 'q24/hq1/' + sha256('q24hq:'+본사코드).slice(0,20) · 열쇠 = PBKDF2(본사 비밀번호, 'q24-hq:'+본사코드) */
+const HQ=(()=>{
+ const enc=new TextEncoder(),dec=new TextDecoder();
+ const LIBS=['https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js','https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js'];
+ const DEF_BROKER='wss://broker.emqx.io:8084/mqtt';
+ let opt={app:'app',label:'앱',kind:'',ver:'',hwid:()=>'',info:()=>({}),handles:[],onCmd:null,onState:null};
+ let KEY='q24HqLink',DONE_KEY='q24HqDone',LOCK_KEY='q24HqLock',ERR_KEY='q24HqErr';
+ const ls={get(k){try{return localStorage.getItem(k)}catch{return null}},set(k,v){try{localStorage.setItem(k,v)}catch{}}};
+ const load=()=>{try{return JSON.parse(ls.get(KEY))||{}}catch{return{}}};
+ let cfg={on:false,code:'',pass:'',store:'',broker:DEF_BROKER,dev:'',owner:''};
+ let client=null,aesKey=null,base='',online=false,gen=0,hqOn=null,hqAt=0,hqVer='',hb=0,lastErr='',lastErrAt=0;
+ const wait={};
+ /* ---- 오류 기록 (원격 "오류 기록 받기"용 · 최근 50개) ---- */
+ let errs=[];
+ function pushErr(m){m=String(m||'').slice(0,300);if(!m)return;lastErr=m;lastErrAt=Date.now();errs.push({at:Date.now(),m});errs=errs.slice(-50);ls.set(ERR_KEY,JSON.stringify(errs))}
+ addEventListener('error',e=>pushErr((e.message||'오류')+(e.filename?' @'+String(e.filename).split('/').pop()+':'+e.lineno:'')));
+ addEventListener('unhandledrejection',e=>pushErr('Promise: '+(e.reason?.message||e.reason)));
+ /* ---- 암호 ---- */
+ const b64=u=>{let s='';for(let i=0;i<u.length;i+=8192)s+=String.fromCharCode(...u.subarray(i,i+8192));return btoa(s)},unb64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+ async function sha256hex(t){const h=await crypto.subtle.digest('SHA-256',enc.encode(t));return[...new Uint8Array(h)].map(b=>b.toString(16).padStart(2,'0')).join('')}
+ async function seal(o){const iv=crypto.getRandomValues(new Uint8Array(12)),ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},aesKey,enc.encode(JSON.stringify(o)));return JSON.stringify({v:1,enc:1,iv:b64(iv),ct:b64(new Uint8Array(ct))})}
+ async function unseal(s){const o=JSON.parse(s);if(!o.enc)throw Error('plain');return JSON.parse(dec.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(o.iv)},aesKey,unb64(o.ct))))}
+ let libP=null;
+ function loadLib(){if(window.mqtt)return Promise.resolve();if(libP)return libP;libP=(async()=>{for(const src of LIBS){try{await new Promise((ok,no)=>{const s=document.createElement('script');s.src=src;s.crossOrigin='anonymous';const t=setTimeout(()=>{s.remove();no()},20000);s.onload=()=>{clearTimeout(t);ok()};s.onerror=()=>{clearTimeout(t);s.remove();no()};document.head.append(s)});if(window.mqtt)return}catch{}}throw Error('MQTT 라이브러리를 받지 못했습니다')})().catch(e=>{libP=null;throw e});return libP}
+ /* ---- 상태 ---- */
+ const linkReady=()=>!!(cfg.on&&cfg.code&&cfg.pass);
+ const configured=()=>linkReady()&&/^Q24-\d{4}$/.test(cfg.store);
+ const devName=()=>cfg.dev||(cfg.store?cfg.store+'-'+opt.label+'-'+opt.hwid():opt.label+'-'+opt.hwid());
+ function state(){const fresh=hqAt&&Date.now()-hqAt<5*60000;return{configured:configured(),on:cfg.on,online,hq:hqOn===null?'unknown':hqOn&&fresh?'on':hqOn===false?'off':'unknown',hqVer,store:cfg.store,dev:cfg.dev,devName:devName(),code:cfg.code}}
+ function emit(){try{opt.onState?.(state())}catch{}}
+ /* ---- 연결 ---- */
+ function stop(){gen++;clearInterval(hb);hb=0;online=false;hqOn=null;hqAt=0;if(client){try{client.end(true)}catch{}client=null}for(const k in wait){clearTimeout(wait[k].t);wait[k].ok({ok:false,code:'offline',msg:'본사 연결이 끊겼습니다'});delete wait[k]}emit()}
+ async function start(){
+  stop();const my=gen;if(!linkReady()){emit();return}
+  if(!window.crypto?.subtle){pushErr('HTTPS가 아니어서 본사 연결 불가');emit();return}
+  try{await loadLib();base='q24/hq1/'+(await sha256hex('q24hq:'+cfg.code)).slice(0,20);
+   const raw=await crypto.subtle.importKey('raw',enc.encode(cfg.pass),'PBKDF2',false,['deriveKey']);
+   aesKey=await crypto.subtle.deriveKey({name:'PBKDF2',salt:enc.encode('q24-hq:'+cfg.code),iterations:120000,hash:'SHA-256'},raw,{name:'AES-GCM',length:256},false,['encrypt','decrypt'])}
+  catch(e){pushErr('본사 연결 준비 실패: '+e.message);if(my===gen)setTimeout(()=>{if(my===gen)start()},30000);emit();return}
+  if(my!==gen)return;
+  const c=mqtt.connect(cfg.broker||DEF_BROKER,{clientId:'q24'+opt.app.slice(0,3)+'hq_'+Math.random().toString(16).slice(2,10),clean:true,keepalive:30,reconnectPeriod:5000,connectTimeout:15000});client=c;
+  c.on('connect',()=>{if(my!==gen)return;online=true;c.subscribe([base+'/status',base+'/bc/all',...(configured()?[base+'/cmd/'+cfg.store,base+'/bc/'+cfg.store]:[])],{qos:1});beat();emit()});
+  c.on('reconnect',()=>{if(my===gen){online=false;emit()}});c.on('offline',()=>{if(my===gen){online=false;emit()}});
+  c.on('error',e=>{if(my===gen)pushErr('본사 연결 오류: '+(e?.message||e))});
+  c.on('message',(t,p)=>{if(my===gen)onMsg(t,typeof p==='string'?p:dec.decode(p)).catch(e=>pushErr('본사 메시지 처리: '+e.message))});
+  hb=setInterval(()=>{if(online)beat()},60000);
+ }
+ async function onMsg(t,s){
+  if(t===base+'/status'){try{const o=JSON.parse(s);hqOn=!!o.on;hqAt=o.at||Date.now();hqVer=o.ver||''}catch{}emit();return}
+  if(t.startsWith(base+'/res/')){const rid=t.slice(base.length+5),w=wait[rid];if(!w)return;let o;try{o=await unseal(s)}catch{o={ok:false,code:'bad_key',msg:'본사 비밀번호가 맞지 않습니다'}}clearTimeout(w.t);delete wait[rid];try{client.unsubscribe(t)}catch{}w.ok(o);return}
+  if(t.startsWith(base+'/bc/')){if(!s){showBc(t.slice(base.length+4),null);return}let b;try{b=await unseal(s)}catch{return}showBc(t.slice(base.length+4),b);return}
+  if(configured()&&t===base+'/cmd/'+cfg.store){if(!s)return;let c;try{c=await unseal(s)}catch{return}await runCmd(c)}
+ }
+ /* 요청 → 응답 (본사 PC가 꺼져 있으면 빨리 실패) */
+ async function req(op,params={},ms=12000,noStore=false){
+  if(!(noStore?linkReady():configured()))return{ok:false,code:'off',msg:'본사 연결이 설정되지 않았습니다'};
+  if(!client)start();
+  for(let i=0;i<50&&!online;i++)await new Promise(r=>setTimeout(r,100));
+  if(!online)return{ok:false,code:'offline',msg:'인터넷(본사 연결)이 끊겨 있습니다'};
+  for(let i=0;i<10&&hqOn===null;i++)await new Promise(r=>setTimeout(r,100));
+  if(hqOn===false)return{ok:false,code:'hq_off',msg:'본사 PC가 꺼져 있습니다'};
+  const rid=opt.app.slice(0,3)+Date.now().toString(36)+Math.random().toString(36).slice(2,7),t=base+'/res/'+rid;
+  return new Promise(ok=>{wait[rid]={ok,t:setTimeout(()=>{delete wait[rid];try{client?.unsubscribe(t)}catch{}ok({ok:false,code:'timeout',msg:'본사 PC 응답이 없습니다'})},ms)};
+   client.subscribe(t,{qos:1},async()=>{try{client.publish(base+'/req',await seal({rid,op,store:cfg.store,dev:devName(),hwid:opt.hwid(),app:opt.app,ver:opt.ver,...params}),{qos:1})}catch(e){clearTimeout(wait[rid]?.t);delete wait[rid];ok({ok:false,code:'error',msg:e.message})}})})}
+ /* 상태 신호 (1분마다) */
+ async function beat(){if(!online||!aesKey||!configured())return;let x={};try{x=opt.info()||{}}catch{}try{client.publish(base+'/hb',await seal({dev:devName(),store:cfg.store,hwid:opt.hwid(),app:opt.app,kind:opt.kind,ver:opt.ver,err:Date.now()-lastErrAt<30*60000?lastErr:'',at:Date.now(),...x}),{qos:0})}catch{}}
+ /* ---- 원격 명령 ---- */
+ let done=[];try{done=JSON.parse(ls.get(DONE_KEY))||[]}catch{}
+ async function runCmd(c){
+  if(!c||!c.id||!c.type)return;if(c.target&&c.target!=='*'&&c.target!==cfg.dev)return;
+  if(!opt.handles.includes(c.type))return;   // 이 앱이 맡지 않는 명령은 응답하지 않음 (다른 기기가 처리)
+  const key=c.id+'@'+devName();if(done.includes(key))return;
+  if(!['lock','unlock'].includes(c.type)&&Date.now()-(c.at||0)>24*3600000)return;   // 하루 지난 명령은 무시
+  done.push(key);done=done.slice(-200);ls.set(DONE_KEY,JSON.stringify(done));
+  let r;try{r=opt.onCmd?await opt.onCmd(c):undefined;if(r===undefined)r=await builtin(c)}catch(e){r={ok:false,result:e.message}}
+  try{client.publish(base+'/ack',await seal({id:c.id,dev:devName(),ok:r?.ok!==false,result:r?.result??''}),{qos:1})}catch{}
+  setTimeout(beat,1500);if(r?.after)setTimeout(r.after,800);
+ }
+ async function builtin(c){
+  switch(c.type){
+   case 'reload':return{ok:true,result:'새로고침',after:()=>location.reload()};
+   case 'update':showMsg('업데이트','본사에서 최신 버전으로 업데이트합니다. 잠시 후 새로고침됩니다.'+(c.text?'\n'+c.text:''),8000);return{ok:true,result:'안내 후 새로고침',after:()=>setTimeout(()=>{try{caches?.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).finally(()=>location.reload())}catch{location.reload()}},7000)};
+   case 'getLog':return{ok:true,result:{errs:errs.slice(-30),ua:navigator.userAgent}};
+   case 'getInfo':{let st=null;try{const e=await navigator.storage?.estimate();if(e)st={usedMB:Math.round(e.usage/1048576),quotaMB:Math.round(e.quota/1048576)}}catch{}let x={};try{x=opt.info()||{}}catch{}return{ok:true,result:{app:opt.app,ver:opt.ver,dev:devName(),hwid:opt.hwid(),screen:screen.width+'x'+screen.height,storage:st,online:navigator.onLine,...x}}}
+   case 'message':showMsg('본사 알림',c.text||'',120000);return{ok:true,result:'표시함'};
+   case 'lock':ls.set(LOCK_KEY,JSON.stringify({id:c.id,text:c.text||'',at:c.at}));showLock();return{ok:true,result:'잠금'};
+   case 'unlock':try{localStorage.removeItem(LOCK_KEY)}catch{}showLock();return{ok:true,result:'잠금 해제'};
+  }return{ok:false,result:'지원하지 않는 명령'}}
+ /* ---- 화면 (띠 · 메시지 · 잠금) ---- */
+ const css=(e,s)=>{e.style.cssText=s;return e};
+ function showMsg(title,text,ms){document.getElementById('hqMsg')?.remove();const d=css(document.createElement('div'),'position:fixed;inset:0;z-index:2147482000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px');d.id='hqMsg';
+  const b=css(document.createElement('div'),'background:#fff;color:#111;max-width:560px;width:100%;border-radius:16px;padding:22px 22px 16px;font:500 20px/1.5 system-ui,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,.4)');
+  const h=css(document.createElement('div'),'font-weight:800;font-size:22px;margin-bottom:8px');h.textContent='📢 '+title;const p=css(document.createElement('div'),'white-space:pre-wrap');p.textContent=text;
+  const k=css(document.createElement('button'),'margin-top:16px;width:100%;padding:14px;font:700 20px system-ui;border:0;border-radius:12px;background:#0b6;color:#fff');k.type='button';k.textContent='확인';k.onclick=()=>d.remove();
+  b.append(h,p,k);d.append(b);document.body.append(d);if(ms)setTimeout(()=>d.remove(),ms)}
+ function showLock(){let L=null;try{L=JSON.parse(ls.get(LOCK_KEY))}catch{}let d=document.getElementById('hqLock');if(!L){d?.remove();return}
+  if(!d){d=css(document.createElement('div'),'position:fixed;inset:0;z-index:2147483000;background:#1b1f24;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;font:600 22px/1.5 system-ui,sans-serif');d.id='hqLock';document.body.append(d)}
+  d.replaceChildren();const a=document.createElement('div');a.style.fontSize='64px';a.textContent='🔒';const b=document.createElement('div');b.style.cssText='font-size:28px;font-weight:800';b.textContent='운영이 잠시 중지되었습니다';const c=document.createElement('div');c.style.whiteSpace='pre-wrap';c.textContent=(L.text||'본사 점검 중입니다.')+'\n카운터에 문의해 주세요.';const e=document.createElement('div');e.style.cssText='font-size:14px;opacity:.6';e.textContent=devName();d.append(a,b,c,e)}
+ const bcs={};
+ const cmpVer=(a,b)=>{const x=String(a).split('.').map(Number),y=String(b).split('.').map(Number);for(let i=0;i<Math.max(x.length,y.length);i++){const d=(x[i]||0)-(y[i]||0);if(d)return d}return 0};
+ function showBc(slot,b){if(!b||b.kind==='off'||(b.until&&b.until<Date.now()))delete bcs[slot];else bcs[slot]=b;drawBc()}
+ function drawBc(){let d=document.getElementById('hqBand');const xs=Object.values(bcs).filter(b=>!b.until||b.until>Date.now());
+  const need=xs.map(b=>b.minVer).filter(v=>v&&opt.ver&&cmpVer(opt.ver,v)<0).sort(cmpVer).pop();
+  if(!xs.length){d?.remove();return}
+  if(!d){d=css(document.createElement('div'),'position:fixed;left:0;right:0;bottom:0;z-index:2147481000;font:700 17px/1.45 system-ui,sans-serif;pointer-events:none');d.id='hqBand';document.body.append(d)}
+  d.replaceChildren(...xs.map(b=>{const r=css(document.createElement('div'),'padding:8px 14px;text-align:center;color:#fff;background:'+(b.kind==='maint'?'#b26a00':'#1565c0')+';border-top:1px solid rgba(255,255,255,.25)');r.textContent=(b.kind==='maint'?'🛠 점검 · ':'📢 ')+b.text+(b.until?' (~'+new Date(b.until).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})+')':'');return r}),
+   ...(need?[(()=>{const r=css(document.createElement('div'),'padding:8px 14px;text-align:center;color:#fff;background:#c62828');r.textContent='⬆ 앱 업데이트가 필요합니다 (지금 v'+opt.ver+' → v'+need+' 이상) · 설정에서 "최신 버전으로 새로고침"';return r})()]:[]))}
+ setInterval(drawBc,60000);
+ /* ---- 바깥에서 쓰는 것 ---- */
+ function prefill(){if(cfg.code||cfg.on)return;try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(!k||k===KEY||!k.startsWith('q24HqLink:'))continue;const o=JSON.parse(localStorage.getItem(k)||'{}');if(o.code&&o.pass){cfg={...cfg,code:o.code,pass:o.pass,store:cfg.store||o.store||'',broker:o.broker||cfg.broker};break}}}catch{}}
+ function init(o){opt={...opt,...o};KEY='q24HqLink:'+opt.app;DONE_KEY='q24HqDone:'+opt.app;LOCK_KEY='q24HqLock:'+opt.app;ERR_KEY='q24HqErr:'+opt.app;
+  try{errs=JSON.parse(ls.get(ERR_KEY))||[]}catch{errs=[]}try{done=JSON.parse(ls.get(DONE_KEY))||[]}catch{done=[]}
+  cfg={...cfg,...load()};
+  /* 같은 기기의 다른 Q24 앱에 본사 접속 정보가 있으면 미리 채워 둠 (켜기는 각 앱에서 [저장]) */
+  prefill();
+  const go=()=>{showLock();start()};document.readyState==='loading'?addEventListener('DOMContentLoaded',go):go()}
+ function save(n){cfg={...cfg,...n};cfg.store=String(cfg.store||'').trim().toUpperCase();cfg.code=String(cfg.code||'').trim();ls.set(KEY,JSON.stringify(cfg));start()}
+ const config=()=>{prefill();return{...cfg}};
+ return{init,save,config,state,req,start,stop,beat,configured,linkReady,pushErr,showMsg,devName,_seal:o=>seal(o),_unseal:s=>unseal(s)};
+})();
+
+/* ===== 점수판 ↔ 본사 PC 연결 (v2.00) · 본사 설정을 켜지 않으면 아무 것도 바뀌지 않음 =====
+   이 점수판 = 테이블 기기 S (예: Q24-0001-T003-S01) · 테이블 번호는 [매장 · 테이블]의 번호 */
+const SCORE_VERSION='2.01';
+const HQ_DEV_ID=(()=>{try{let d=localStorage.getItem('q24DevId');if(!d){d=[...crypto.getRandomValues(new Uint8Array(4))].map(b=>b.toString(16).padStart(2,'0')).join('');localStorage.setItem('q24DevId',d)}return d}catch{return 'nodevid'}})();
+const hqEsc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function hqStatusText(st){st=st||HQ.state();return !st.on?'본사 연결 꺼짐':!st.configured?'⚠ 매장번호(Q24-0000 형식)·본사 코드·본사 비밀번호를 넣어 주세요':!st.online?'⏳ 본사 연결 중…':st.hq==='off'?'⚠ 본사 PC가 꺼져 있습니다':'✅ 본사 연결됨 · 매장 '+st.store+' · 이 점수판 '+(st.dev||'미등록 → [이 점수판 본사 등록]')}
+function hqStatusUi(st){const e=document.getElementById('hqStatus');if(e)e.textContent=hqStatusText(st)}
+/* 예전 기본 문구의 매장 이름 바꾸기 */
+if(/가브리엘 당구장/.test(S.ticker?.text||'')){S.ticker.text=S.ticker.text.split('가브리엘 당구장').join('Q24 당구장');saveS()}
+SCHEMA.push({id:'hq',t:'본사 연결 (Q24 본사 PC)',ic:'store',rows:[{custom:'hq'}]});NAVN.hq='본사 연결';
+CUSTOM.hq=()=>{const c=HQ.config(),inp=(id,v,ph,secret)=>`<input id="${id}" class="fi w" value="${hqEsc(v)}" placeholder="${ph}" autocomplete="off" autocapitalize="off" spellcheck="false"${secret?' data-lpignore="true" style="-webkit-text-security:disc"':''}>`;
+ return `<div class="arow"><div class="l"><b>본사 연결 사용</b><small>켜면 이 점수판이 본사에 상태를 알리고 원격 점검·공지를 받습니다</small></div><div class="c"><button class="tg ${c.on?'on':''}" id="hqOn" data-x="hqTg"></button></div></div>
+ <div class="arow"><div class="l"><b>매장번호</b><small>본사에서 받은 번호 · 예: Q24-0001</small></div><div class="c">${inp('hqStore',c.store,'Q24-0001')}</div></div>
+ <div class="arow"><div class="l"><b>본사 코드</b></div><div class="c">${inp('hqCode',c.code,'본사 코드')}</div></div>
+ <div class="arow"><div class="l"><b>본사 비밀번호</b></div><div class="c">${inp('hqPass',c.pass,'본사 비밀번호',1)}</div></div>
+ <div class="arow"><div class="l"><b>이 점수판</b><small>테이블 ${S.store.table}번 · 기기 고유번호 ${HQ_DEV_ID} · 점수판 v${SCORE_VERSION}</small></div><div class="c"><button class="btn pri" data-x="hqSave">저장하고 연결</button><button class="btn" data-x="hqPing">본사 응답 확인</button><button class="btn" data-x="hqDev">이 점수판 본사 등록</button></div></div>
+ <div class="arow"><div class="l"><b>상태</b></div><div class="c"><span id="hqStatus" style="font-size:1.5rem;font-weight:700">${hqEsc(hqStatusText())}</span></div></div>`};
+document.getElementById('aCont').addEventListener('click',async e=>{const x=e.target.closest('[data-x^="hq"]');if(!x)return;const a=x.dataset.x;if(a==='hqTg'){x.classList.toggle('on');return}const v=id=>(document.getElementById(id)?.value||'').trim();
+ if(a==='hqSave'){const store=v('hqStore').toUpperCase(),on=document.getElementById('hqOn').classList.contains('on'),old=HQ.config();if(on&&!/^Q24-\d{4}$/.test(store))return toast('매장번호는 Q24-0001 형식',1);
+  HQ.save({on,store,code:v('hqCode'),pass:document.getElementById('hqPass').value,dev:store===old.store?old.dev:''});toast(on?'본사 연결을 저장했습니다':'본사 연결을 껐습니다');setTimeout(hqStatusUi,300)}
+ if(a==='hqPing'){const t=Date.now(),r=await HQ.req('ping',{},8000,true);toast(r.ok?'본사 PC 응답 · '+(Date.now()-t)+'ms':'본사 응답 없음: '+r.msg,!r.ok)}
+ if(a==='hqDev'){if(!HQ.configured())return toast('본사 연결을 먼저 저장해 주세요',1);const tn=+S.store.table||1;
+  let r=await HQ.req('deviceRegister',{kind:'S',tableNum:tn,ver:SCORE_VERSION,place:tn+'번 테이블 점수판'});
+  if(r.code==='occupied'&&await confirmBox('기기 교체',hqEsc(r.msg)+'<br>이 점수판으로 교체할까요?','교체'))r=await HQ.req('deviceRegister',{kind:'S',tableNum:tn,num:+String(r.device).slice(-2),ver:SCORE_VERSION,place:tn+'번 테이블 점수판',replace:true});
+  if(!r.ok)return toast('기기 등록 실패: '+hqEsc(r.msg||r.code),1);HQ.save({dev:r.device});
+  const g=await HQ.req('storeGet',{});if(g.ok&&g.store?.name&&g.store.name!==S.store.name&&await confirmBox('매장명 맞추기','점수판 매장명 <b>'+hqEsc(S.store.name)+'</b> 을(를) 본사 매장이름 <b>'+hqEsc(g.store.name)+'</b> (으)로 바꿀까요?','바꾸기')){S.store.name=g.store.name;saveS();try{renderHome()}catch{}}
+  toast('본사에 등록했습니다 · '+hqEsc(r.device));drawAdmin()}});
+HQ.init({app:'score',label:'점수판',kind:'S',ver:SCORE_VERSION,hwid:()=>HQ_DEV_ID,
+ info:()=>({table:S.store.table,storeName:S.store.name,game:G&&!G.finished?(KIND[G.kind]||G.kind):'',mode:S.view.mode}),
+ handles:['reload','update','getLog','getInfo','message','lock','unlock','setConfig'],
+ onCmd:async c=>{
+  if((c.type==='reload'||c.type==='update')&&G&&!G.finished)return{ok:true,result:'경기 중 · 경기가 끝나면 새로고침',after:()=>{const t=setInterval(()=>{if(!G||G.finished){clearInterval(t);location.reload()}},5000)}};
+  if(c.type!=='setConfig')return undefined;const m=/^([\w.-]+)=(.*)$/s.exec(c.text||'');if(!m)return{ok:false,result:'"키=값" 형식이 아님'};
+  let k=m[1],val=m[2].trim();if(k==='ticker')k='ticker.text';if(k==='storeName')k='store.name';if(k==='table')k='store.table';const cur=getP(S,k);
+  if(k==='store.table'&&!(+val>=1&&+val<=99))return{ok:false,result:'테이블 번호는 1~99'};
+  if(!/^(ticker|store\.name|store\.table|sys|snd)\b/.test(k)||cur===undefined||typeof cur==='object')return{ok:false,result:'점수판에서 바꿀 수 있는 키: ticker, ticker.on, store.name, sys.*, snd.*'};
+  const nv=typeof cur==='number'?+val:typeof cur==='boolean'?/^(1|true|on|켜기)$/i.test(val):val;if(typeof cur==='number'&&!Number.isFinite(nv))return{ok:false,result:'숫자를 넣어 주세요'};
+  setting(k,nv);return{ok:true,result:k+'='+nv}},
+ onState:hqStatusUi});
+
 /* ---------- boot ---------- */
 (function boot(){
  applyLite();
